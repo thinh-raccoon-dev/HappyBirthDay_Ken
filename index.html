@@ -231,21 +231,57 @@ body {
   position: absolute; inset: 0; pointer-events: none;
 }
 
-.burst-photo {
+.polaroid {
   position: absolute;
-  width: clamp(72px, 17vmin, 138px);
-  height: clamp(72px, 17vmin, 138px);
-  object-fit: cover;
-  border-radius: 12px;
-  border: 3px solid rgba(255,255,255,.88);
-  box-shadow: 0 6px 24px rgba(0,0,0,.55), 0 0 16px rgba(192,132,252,.4);
+  top: 50%; left: 50%;
+  width: clamp(120px, 19vmin, 190px);
+  background: linear-gradient(180deg,#fdfdfd,#f1ece3);
+  padding: 10px 10px 38px 10px;
+  border-radius: 4px;
+  box-shadow:
+    0 14px 30px rgba(0,0,0,.55),
+    0 0 24px rgba(192,132,252,.22),
+    inset 0 0 0 1px rgba(0,0,0,.05);
   opacity: 0;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
   will-change: transform, opacity;
-  cursor: pointer;
+  transform-style: preserve-3d;
+  perspective: 1000px;
+}
+.polaroid img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  display: block;
+  border-radius: 2px;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  background: #1a0030;
+}
+.polaroid-cap {
+  position: absolute;
+  left: 0; right: 0; bottom: 10px;
+  text-align: center;
+  font-family: 'Brush Script MT','Segoe Script','Lucida Handwriting','Comic Sans MS',cursive;
+  color: #2a2a2a;
+  font-size: clamp(.9rem, 1.6vmin, 1.1rem);
+  letter-spacing: .02em;
+  pointer-events: none;
+}
+.polaroid.dragging {
+  cursor: grabbing;
+  box-shadow:
+    0 26px 55px rgba(0,0,0,.7),
+    0 0 38px rgba(192,132,252,.5),
+    inset 0 0 0 1px rgba(0,0,0,.05);
+  z-index: 999;
 }
 
 .burst-title {
-  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  position: absolute; top: clamp(18px, 5vh, 56px); left: 50%; transform: translateX(-50%);
   font-size: clamp(1.2rem,4vw,2.2rem); font-weight: 900; text-align: center;
   background: linear-gradient(135deg,var(--gold),var(--pink),var(--purple));
   -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
@@ -254,6 +290,7 @@ body {
   white-space: nowrap;
   text-shadow: none;
   filter: drop-shadow(0 0 12px rgba(251,191,36,.5));
+  z-index: 10;
 }
 .burst-title.show { opacity: 1; }
 
@@ -747,61 +784,147 @@ function initOutro() {
 }
 
 /* ══════════════════════════════════════
-   PHOTO BURST
+   PHOTO BURST — Draggable Polaroids
 ══════════════════════════════════════ */
+const POLAROID_CAPTIONS = [
+  'Ken nhỏ', 'Tuổi thơ ✨', 'Chibi cute', 'Cool guy', 'Smile :)',
+  'Khoảnh khắc', 'Forever 14', 'Ngầu lòi 🔥', 'Bestie', 'Sweet 💜',
+  'Star ⭐', 'Memory', 'Vui ghê', 'Happy day',
+];
+const POLAROID_ITEMS = [];
+
 (function buildPhotoBurst() {
   const overlay = document.getElementById('photo-burst');
-  PHOTOS.forEach(src => {
+  PHOTOS.forEach((src, i) => {
+    const card = document.createElement('div');
+    card.className = 'polaroid';
     const img = document.createElement('img');
-    img.src = src; img.className = 'burst-photo'; img.alt = 'Kỷ niệm';
-    img.addEventListener('click', e => { e.stopPropagation(); });
-    overlay.insertBefore(img, overlay.querySelector('.burst-title'));
+    img.src = src; img.alt = 'Kỷ niệm'; img.draggable = false;
+    const cap = document.createElement('div');
+    cap.className = 'polaroid-cap';
+    cap.textContent = POLAROID_CAPTIONS[i % POLAROID_CAPTIONS.length];
+    card.append(img, cap);
+    overlay.insertBefore(card, overlay.querySelector('.burst-title'));
+    POLAROID_ITEMS.push({ el: card, drag: makeDraggable(card) });
   });
-  overlay.addEventListener('click', () => closeBurst());
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeBurst(); });
 })();
+
+function makeDraggable(card) {
+  let posX = 0, posY = 0, baseRot = 0;
+  let dragging = false, pointerId = null;
+  let startX = 0, startY = 0, originX = 0, originY = 0;
+  let lastT = 0, lastDX = 0, lastDY = 0;
+
+  function apply(tiltX, tiltY) {
+    card.style.transform =
+      `translate(-50%, -50%) translate3d(${posX}px, ${posY}px, 0) ` +
+      `scale(1) rotate(${baseRot}deg) rotateX(${tiltX||0}deg) rotateY(${tiltY||0}deg)`;
+  }
+
+  function onDown(e) {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.stopPropagation();
+    pointerId = e.pointerId;
+    try { card.setPointerCapture(pointerId); } catch (_) {}
+    dragging = true;
+    card.classList.add('dragging');
+    card.parentElement.appendChild(card); // bring to front
+    card.style.transition = 'none';
+    startX = e.clientX; startY = e.clientY;
+    originX = posX; originY = posY;
+    lastT = performance.now();
+    lastDX = 0; lastDY = 0;
+  }
+  function onMove(e) {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    const now = performance.now();
+    const dt = Math.max(8, now - lastT);
+    const vx = (dx - lastDX) / dt * 16;
+    const vy = (dy - lastDY) / dt * 16;
+    lastDX = dx; lastDY = dy; lastT = now;
+    posX = originX + dx;
+    posY = originY + dy;
+    const tiltX = Math.max(-22, Math.min(22, -vy * 1.4));
+    const tiltY = Math.max(-22, Math.min(22,  vx * 1.4));
+    apply(tiltX, tiltY);
+  }
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    card.classList.remove('dragging');
+    try { card.releasePointerCapture(pointerId); } catch (_) {}
+    // Spring back into bounds
+    const w = card.offsetWidth, h = card.offsetHeight;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const minMarginX = w * 0.4, minMarginY = h * 0.4;
+    const cxNow = vw / 2 + posX, cyNow = vh / 2 + posY;
+    const targetCX = Math.max(minMarginX, Math.min(vw - minMarginX, cxNow));
+    const targetCY = Math.max(minMarginY, Math.min(vh - minMarginY, cyNow));
+    posX = targetCX - vw / 2;
+    posY = targetCY - vh / 2;
+    card.style.transition = 'transform .55s cubic-bezier(.22,.84,.36,1.12)';
+    apply(0, 0);
+  }
+
+  card.addEventListener('pointerdown', onDown);
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointercancel', onUp);
+
+  return {
+    setInitial(x, y, rot) {
+      posX = x; posY = y; baseRot = rot;
+      apply(0, 0);
+    },
+  };
+}
 
 function launchPhotoBurst() {
   const overlay = document.getElementById('photo-burst');
   overlay.classList.add('active');
 
   const vw = window.innerWidth, vh = window.innerHeight;
-  // radius unit: based on smaller dimension, clamped so photos stay mostly visible
-  const unit = Math.min(vw, vh) * 0.31;
-  const imgs  = overlay.querySelectorAll('.burst-photo');
+  const n = POLAROID_ITEMS.length;
+  const cols = Math.max(3, Math.min(n, Math.round(Math.sqrt(n * vw / vh))));
+  const rows = Math.ceil(n / cols);
+  const cellW = vw / cols, cellH = vh / rows;
 
-  imgs.forEach((img, i) => {
-    // Two rings: 7 inner, 7 outer
-    const ring   = i < 7 ? 0 : 1;
-    const idxInRing = ring===0 ? i : i-7;
-    const angle  = (Math.PI*2/7)*idxInRing + (ring===0 ? 0 : Math.PI/7);
-    const radius = ring===0 ? unit*0.52 : unit*0.98;
-    const tx = Math.cos(angle)*radius;
-    const ty = Math.sin(angle)*radius;
-    const rot  = (Math.random()-.5)*44;
-    const delay = i*38 + Math.random()*22;
-    const dur   = (.62 + Math.random()*.35).toFixed(2);
+  // Shuffle so visual order != image array order
+  const order = [...Array(n).keys()].sort(() => Math.random() - 0.5);
 
-    img.style.left = vw/2 + 'px';
-    img.style.top  = vh/2 + 'px';
-    img.style.transform = 'translate(-50%,-50%) scale(0) rotate(0deg)';
-    img.style.opacity   = '0';
-    img.style.transition= 'none';
+  // Reset all to center with scale .4 (entrance state)
+  POLAROID_ITEMS.forEach(({ el }) => {
+    el.style.transition = 'none';
+    el.style.opacity = '0';
+    el.style.transform = 'translate(-50%, -50%) translate3d(0,0,0) scale(.4) rotate(0deg) rotateX(0deg) rotateY(0deg)';
+  });
+  void overlay.offsetHeight; // force reflow so transition: none takes effect
+
+  // Animate each polaroid to its scattered target, staggered
+  order.forEach((idx, animIdx) => {
+    const item = POLAROID_ITEMS[idx];
+    const r = Math.floor(animIdx / cols), c = animIdx % cols;
+    const cx = cellW * (c + 0.5);
+    const cy = cellH * (r + 0.5);
+    const jx = (Math.random() - 0.5) * cellW * 0.4;
+    const jy = (Math.random() - 0.5) * cellH * 0.4;
+    const tx = cx + jx - vw / 2;
+    const ty = cy + jy - vh / 2;
+    const rot = (Math.random() - 0.5) * 34;
 
     setTimeout(() => {
-      img.style.transition = `transform ${dur}s cubic-bezier(.17,.67,.38,1.12), opacity .35s ease`;
-      img.style.transform  = `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) rotate(${rot}deg) scale(1)`;
-      img.style.opacity    = '.93';
-    }, delay);
+      item.el.style.transition = 'transform .85s cubic-bezier(.18,.78,.34,1.05), opacity .4s ease';
+      item.el.style.opacity = '.98';
+      item.drag.setInitial(tx, ty, rot);
+    }, 80 + animIdx * 75);
   });
 
-  // Show title
-  setTimeout(()=> document.getElementById('burst-title').classList.add('show'), 1200);
-  // Show close hint
-  setTimeout(()=> document.getElementById('burst-close').classList.add('show'), 2000);
-  // Auto-close
-  setTimeout(() => closeBurst(), 10000);
+  setTimeout(() => document.getElementById('burst-title').classList.add('show'), 700);
+  setTimeout(() => document.getElementById('burst-close').classList.add('show'), 1500);
 
-  // Fireworks inside burst overlay
   startBurstFW();
 }
 
@@ -816,8 +939,8 @@ function closeBurst() {
     overlay.classList.remove('active');
     overlay.style.opacity = '';
     overlay.style.transition = '';
-    const cv=document.getElementById('burst-fw-canvas');
-    cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
+    const cv = document.getElementById('burst-fw-canvas');
+    cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
   }, 520);
 }
 
